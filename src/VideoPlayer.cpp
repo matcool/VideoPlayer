@@ -143,6 +143,7 @@ namespace videoplayer {
 
         VideoPlayer* self;
         ((FMOD::ChannelControl*)chanControl)->getUserData((void**)&self);
+        if (self->m_stopped) return FMOD_OK; // For destructor/onExit
 
         self->m_channel->stop();
         self->m_sound->release();
@@ -180,9 +181,14 @@ namespace videoplayer {
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 
-    VideoPlayer::~VideoPlayer() {
+    void VideoPlayer::onExit() {
         m_channel->stop();
         m_sound->release();
+        m_stopped = true;
+    }
+
+    VideoPlayer::~VideoPlayer() {
+        onExit();
     }
 
     void VideoPlayer::videoCallback(plm_t* mpeg, plm_frame_t* frame, void* user) {

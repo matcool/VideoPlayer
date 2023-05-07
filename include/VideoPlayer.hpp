@@ -34,8 +34,8 @@ namespace videoplayer {
         virtual void update(float delta) override;
         virtual void draw() override;
 
-
-        virtual ~VideoPlayer() override;
+        virtual ~VideoPlayer();
+        virtual void onExit() override;
 
         static void videoCallback(plm_t* mpeg, plm_frame_t* frame, void* user);
         static void audioCallback(plm_t* mpeg, plm_samples_t* samples, void* user);
@@ -54,6 +54,7 @@ namespace videoplayer {
 
         bool m_paused;
         bool m_loop;
+        bool m_stopped;
         float m_volume = 1.0f;
     public:
 
