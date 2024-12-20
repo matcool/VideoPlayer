@@ -2,12 +2,6 @@
 #define _VIDEO_PLAYER_HPP
 
 #include <Geode/Bindings.hpp>
-#include <Geode/cocos/platform/CCGL.h>
-
-#pragma warning(disable:4996)
-#include "../pl_mpeg/pl_mpeg.h"
-#pragma warning(default:4996)
-
 #include <queue>
 
 #ifdef GEODE_IS_WINDOWS
@@ -20,33 +14,14 @@
     #define VIDEO_PLAYER_DLL
 #endif
 
-typedef unsigned int GLuint;
-
-
 namespace videoplayer {
     class VIDEO_PLAYER_DLL VideoPlayer : public cocos2d::CCNodeRGBA {
-    protected:
-        bool init(ghc::filesystem::path const& path, bool loop);
-        
-        void initAudio();
-        static FMOD_RESULT F_CALLBACK audioCallback(FMOD_CHANNELCONTROL *chanControl, FMOD_CHANNELCONTROL_TYPE controlType, FMOD_CHANNELCONTROL_CALLBACK_TYPE callbackType, void *commandData1, void *commandData2);
-
-        virtual void update(float delta) override;
-        virtual void draw() override;
-
-        virtual ~VideoPlayer();
-        virtual void onExit() override;
-
-        static void videoCallback(plm_t* mpeg, plm_frame_t* frame, void* user);
-        static void audioCallback(plm_t* mpeg, plm_samples_t* samples, void* user);
-
-        static FMOD_RESULT F_CALLBACK PCMRead(FMOD_SOUND *sound, void *data, unsigned int length);
-
-        ghc::filesystem::path m_path;
-        plm_t* m_stream;
+        struct Impl;
+        std::unique_ptr<Impl> m_impl;
+        friend struct Impl;
 
         cocos2d::CCSize m_dimensions;
-        GLuint m_textures[3]; // y, cb, cr
+        unsigned int m_textures[3]; // y, cb, cr
         std::queue<float> m_samples;
 
         FMOD::Channel* m_channel;
@@ -56,6 +31,18 @@ namespace videoplayer {
         bool m_loop;
         bool m_stopped;
         float m_volume = 1.0f;
+
+    protected:
+        bool init(std::filesystem::path const& path, bool loop);
+        
+        void initAudio();
+
+        virtual void update(float delta) override;
+        virtual void draw() override;
+
+        VideoPlayer();
+        virtual ~VideoPlayer();
+        virtual void onExit() override;
     public:
 
         /**
@@ -65,7 +52,7 @@ namespace videoplayer {
          * @param loop Whether or not playback should loop upon completion.
          * @return A new initialized video player
          */
-        static VideoPlayer* create(ghc::filesystem::path const& path, bool loop=false);
+        static VideoPlayer* create(std::filesystem::path const& path, bool loop=false);
 
         /**
          * @brief Sets the content height of the video player, maintaining aspect ratio

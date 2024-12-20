@@ -1,6 +1,8 @@
 // https://github.com/phoboslab/pl_mpeg/blob/master/pl_mpeg_player.c
 // https://katyscode.wordpress.com/2013/02/28/cutting-your-teeth-on-fmod-part-5-real-time-streaming-of-programmatically-generated-audio/
 #define PL_MPEG_IMPLEMENTATION
+#define _CRT_SECURE_NO_WARNINGS 1
+#include <pl_mpeg.h>
 #include "VideoPlayer.hpp"
 #include <math.h>
 
@@ -43,26 +45,38 @@ const char* APP_FRAGMENT_SHADER_YCRCB = APP_SHADER_SOURCE(
 );
 
 namespace videoplayer {
-    bool VideoPlayer::init(ghc::filesystem::path const& path, bool loop) {
+    struct VideoPlayer::Impl {
+        plm_t* m_stream = nullptr;
+
+        static void videoCallback(plm_t* mpeg, plm_frame_t* frame, void* user);
+        static void audioCallback(plm_t* mpeg, plm_samples_t* samples, void* user);
+        static FMOD_RESULT F_CALLBACK audioCallback(FMOD_CHANNELCONTROL *chanControl, FMOD_CHANNELCONTROL_TYPE controlType, FMOD_CHANNELCONTROL_CALLBACK_TYPE callbackType, void *commandData1, void *commandData2);
+        static FMOD_RESULT F_CALLBACK PCMRead(FMOD_SOUND *sound, void *data, unsigned int length);
+    };
+
+    VideoPlayer::VideoPlayer() {
+        m_impl = std::make_unique<Impl>();
+    }
+
+    bool VideoPlayer::init(std::filesystem::path const& path, bool loop) {
         if (!CCNode::init()) return false;
 
         // GENERAL
-        m_path = path;
-        m_stream = plm_create_with_filename(m_path.string().c_str());
+        auto* stream = m_impl->m_stream = plm_create_with_filename(path.string().c_str());
         
-        if (!m_stream) {
-            log::error("File at " + m_path.string() + " not found.");
+        if (!stream) {
+            log::error("File at {} not found.", path);
             return false;
         };
 
-        plm_set_loop(m_stream, loop);
+        plm_set_loop(stream, loop);
         m_loop = loop;
 
-        plm_set_video_decode_callback(m_stream, VideoPlayer::videoCallback, this);
-        plm_set_audio_decode_callback(m_stream, VideoPlayer::audioCallback, this);
+        plm_set_video_decode_callback(stream, Impl::videoCallback, this);
+        plm_set_audio_decode_callback(stream, Impl::audioCallback, this);
 
         // VIDEO
-        m_dimensions = CCSize(m_stream->video_decoder->mb_width, m_stream->video_decoder->mb_height);
+        m_dimensions = CCSize(stream->video_decoder->mb_width, stream->video_decoder->mb_height);
 
         CCGLProgram* shader = new CCGLProgram;
 
@@ -77,7 +91,7 @@ namespace videoplayer {
 
         const char* texture_names[3] = {"texture_y", "texture_cb", "texture_cr"};
 
-        plm_frame_t* frame = &m_stream->video_decoder->frame_current;
+        plm_frame_t* frame = &stream->video_decoder->frame_current;
         plm_plane_t planes[3] = {frame->y, frame->cb, frame->cr};
 
         for (int i = 0; i < 3; i++) {
@@ -112,33 +126,31 @@ namespace videoplayer {
     void VideoPlayer::initAudio() {
         FMODAudioEngine* engine = FMODAudioEngine::sharedEngine();
 
-        int sampleRate = plm_get_samplerate(m_stream);
+        auto* stream = m_impl->m_stream;
+        int sampleRate = plm_get_samplerate(stream);
 
         FMOD_CREATESOUNDEXINFO soundInfo;
         memset(&soundInfo, 0, sizeof(FMOD_CREATESOUNDEXINFO));
         soundInfo.cbsize = sizeof(FMOD_CREATESOUNDEXINFO);
         soundInfo.decodebuffersize = PLM_AUDIO_SAMPLES_PER_FRAME * 2;
-        soundInfo.length = sampleRate * 2 * sizeof(float) * plm_get_duration(m_stream);
+        soundInfo.length = sampleRate * 2 * sizeof(float) * plm_get_duration(stream);
         soundInfo.numchannels = 2;
         soundInfo.defaultfrequency = sampleRate;
         soundInfo.format = FMOD_SOUND_FORMAT_PCMFLOAT;
-        soundInfo.pcmreadcallback = &VideoPlayer::PCMRead;
+        soundInfo.pcmreadcallback = &VideoPlayer::Impl::PCMRead;
         soundInfo.userdata = this;
 
         m_samples = {};
         engine->m_system->createStream(nullptr, FMOD_OPENUSER, &soundInfo, &m_sound);
 
-        FMOD::ChannelGroup* group;
-        engine->m_globalChannel->getChannelGroup(&group);
-
-        engine->m_system->playSound(m_sound, group, false, &m_channel);
+        engine->m_system->playSound(m_sound, engine->m_globalChannel, false, &m_channel);
         m_channel->setVolume(m_volume);
         
         m_channel->setUserData(this);
-        if (m_loop) m_channel->setCallback(&VideoPlayer::audioCallback);
+        if (m_loop) m_channel->setCallback(&VideoPlayer::Impl::audioCallback);
     }
 
-    FMOD_RESULT F_CALLBACK VideoPlayer::audioCallback(FMOD_CHANNELCONTROL *chanControl, FMOD_CHANNELCONTROL_TYPE controlType, FMOD_CHANNELCONTROL_CALLBACK_TYPE callbackType, void *commandData1, void *commandData2) {
+    FMOD_RESULT F_CALLBACK VideoPlayer::Impl::audioCallback(FMOD_CHANNELCONTROL *chanControl, FMOD_CHANNELCONTROL_TYPE controlType, FMOD_CHANNELCONTROL_CALLBACK_TYPE callbackType, void *commandData1, void *commandData2) {
         if (callbackType != FMOD_CHANNELCONTROL_CALLBACK_END) return FMOD_OK;
 
         VideoPlayer* self;
@@ -152,9 +164,8 @@ namespace videoplayer {
         return FMOD_OK;
     }
 
-    static int times = 0;
     void VideoPlayer::update(float delta) {
-        if (!m_paused) plm_decode(m_stream, delta);
+        if (!m_paused) plm_decode(m_impl->m_stream, delta);
     }
 
     void VideoPlayer::draw() {
@@ -191,7 +202,7 @@ namespace videoplayer {
         onExit();
     }
 
-    void VideoPlayer::videoCallback(plm_t* mpeg, plm_frame_t* frame, void* user) {
+    void VideoPlayer::Impl::videoCallback(plm_t* mpeg, plm_frame_t* frame, void* user) {
         VideoPlayer* self = (VideoPlayer*) user;
 
         plm_plane_t* frames[3] = {&frame->y, &frame->cb, &frame->cr};
@@ -209,7 +220,7 @@ namespace videoplayer {
         }
     }
 
-    void VideoPlayer::audioCallback(plm_t* mpeg, plm_samples_t* samples, void* user) {
+    void VideoPlayer::Impl::audioCallback(plm_t* mpeg, plm_samples_t* samples, void* user) {
         VideoPlayer* self = (VideoPlayer*) user;
 
         for (unsigned int i = 0; i < samples->count * 2; i++) {
@@ -221,7 +232,7 @@ namespace videoplayer {
         }
     }
 
-    FMOD_RESULT F_CALLBACK VideoPlayer::PCMRead(FMOD_SOUND *sound, void *data, unsigned int length) {
+    FMOD_RESULT F_CALLBACK VideoPlayer::Impl::PCMRead(FMOD_SOUND *sound, void *data, unsigned int length) {
         VideoPlayer* self;
         ((FMOD::Sound*)sound)->getUserData((void**)&self);
         if (!self) return FMOD_OK;
@@ -239,7 +250,7 @@ namespace videoplayer {
         return FMOD_OK;
     }
 
-    VideoPlayer* VideoPlayer::create(ghc::filesystem::path const& path, bool loop) {
+    VideoPlayer* VideoPlayer::create(std::filesystem::path const& path, bool loop) {
         VideoPlayer* ret = new VideoPlayer;
         if (ret && ret->init(path, loop)) {
             ret->autorelease();
